@@ -7,10 +7,40 @@
 #include "esphome/components/watchdog/watchdog.h"
 #include "esphome/components/network/util.h"
 
+#include <algorithm>
+
 namespace esphome {
 namespace transit_tracker {
 
 static const char *TAG = "transit_tracker.component";
+
+// Line icons: 0 = transparent, 1 = line color, 2 = white
+const uint8_t line_1_icon[8][8] = {
+  {0, 0, 1, 1, 1, 1, 0, 0},  // row 0 - top of circle
+  {0, 1, 1, 2, 2, 1, 1, 0},  // row 1 - start "1" here
+  {1, 1, 2, 2, 2, 1, 1, 1},  // row 2 - serif
+  {1, 1, 1, 2, 2, 1, 1, 1},  // row 3 - stem
+  {1, 1, 1, 2, 2, 1, 1, 1},  // row 4 - stem
+  {1, 1, 2, 2, 2, 2, 1, 1},  // row 5 - base
+  {0, 1, 1, 1, 1, 1, 1, 0},  // row 6 - circle
+  {0, 0, 1, 1, 1, 1, 0, 0}   // row 7 - bottom of circle
+};
+
+const uint8_t line_2_icon[8][8] = {
+  {0, 0, 1, 1, 1, 1, 0, 0},  // row 0 - top of circle
+  {0, 1, 2, 2, 2, 1, 1, 0},  // row 1 - top of "2"
+  {1, 1, 1, 1, 2, 2, 1, 1},  // row 2 
+  {1, 1, 1, 2, 2, 1, 1, 1},  // row 3
+  {1, 1, 2, 2, 1, 1, 1, 1},  // row 4
+  {1, 1, 2, 2, 2, 2, 1, 1},  // row 5 - base
+  {0, 1, 1, 1, 1, 1, 1, 0},  // row 6 - circle
+  {0, 0, 1, 1, 1, 1, 0, 0}   // row 7 - bottom of circle
+};
+
+// 1 Line: Green, 2 Line: Blue
+const Color LINE_1_COLOR = Color(0x28813F);
+const Color LINE_2_COLOR = Color(0x0033A0);
+const Color LINE_ICON_WHITE = Color(0xFFFFFF);
 
 void TransitTracker::setup() {
   this->ws_client_.onMessage([this](websockets::WebsocketsMessage message) {
@@ -69,6 +99,15 @@ void TransitTracker::dump_config() {
   ESP_LOGCONFIG(TAG, "  List mode: %s", this->list_mode_.c_str());
   ESP_LOGCONFIG(TAG, "  Display departure times: %s", this->display_departure_times_ ? "true" : "false");
   ESP_LOGCONFIG(TAG, "  Scroll Headsigns: %s", this->scroll_headsigns_ ? "true" : "false");
+  ESP_LOGCONFIG(TAG, "  Show Line Icons: %s", this->show_line_icons_ ? "true" : "false");
+  if (!this->route_sort_order_.empty()) {
+    std::string sort_order_str;
+    for (size_t i = 0; i < this->route_sort_order_.size(); i++) {
+      if (i > 0) sort_order_str += ";";
+      sort_order_str += this->route_sort_order_[i];
+    }
+    ESP_LOGCONFIG(TAG, "  Route sort order: %s", sort_order_str.c_str());
+  }
 }
 
 void TransitTracker::reconnect() {
@@ -136,6 +175,7 @@ void TransitTracker::on_ws_message_(websockets::WebsocketsMessage message) {
 
       this->schedule_state_.trips.push_back({
         .route_id = route_id,
+        .stop_id = trip["stopId"].as<std::string>(),  // Add this
         .route_name = route_name,
         .route_color = route_color,
         .headsign = headsign,
@@ -279,6 +319,17 @@ void TransitTracker::set_route_styles_from_text(const std::string &text) {
   }
 }
 
+void TransitTracker::set_sort_order_from_text(const std::string &text) {
+  this->route_sort_order_.clear();
+  for (const auto &route_id : split(text, ';')) {
+    if (!route_id.empty()) {
+      this->route_sort_order_.push_back(route_id);
+      ESP_LOGV(TAG, "Added route to sort order: %s (priority %d)", route_id.c_str(), this->route_sort_order_.size() - 1);
+    }
+  }
+  ESP_LOGD(TAG, "Set route sort order with %d routes", this->route_sort_order_.size());
+}
+
 void TransitTracker::draw_text_centered_(const char *text, Color color) {
   int display_center_x = this->display_->get_width() / 2;
   int display_center_y = this->display_->get_height() / 2;
@@ -334,23 +385,59 @@ void HOT TransitTracker::draw_realtime_icon_(int bottom_right_x, int bottom_righ
   }
 }
 
+void TransitTracker::draw_line_icon_(int x, int y, const std::string &route_name) {
+  const uint8_t (*icon)[8] = nullptr;
+  Color line_color;
+
+  if (route_name == "1") {
+    icon = line_1_icon;
+    line_color = LINE_1_COLOR;
+  } else if (route_name == "2") {
+    icon = line_2_icon;
+    line_color = LINE_2_COLOR;
+  } else {
+    return;
+  }
+
+  for (int row = 0; row < 8; ++row) {
+    for (int col = 0; col < 8; ++col) {
+      uint8_t pixel = icon[row][col];
+      if (pixel == 0) {
+        continue;  // transparent
+      }
+      Color color = (pixel == 1) ? line_color : LINE_ICON_WHITE;
+      this->display_->draw_pixel_at(x + col, y + row, color);
+    }
+  }
+}
+
 void TransitTracker::draw_trip(
     const Trip &trip, int y_offset, int font_height, unsigned long uptime, uint rtc_now,
     bool no_draw, int *headsign_overflow_out, int scroll_cycle_duration
 ) {
-    if (!no_draw) {
-      this->display_->print(0, y_offset, this->font_, trip.route_color, display::TextAlign::TOP_LEFT, trip.route_name.c_str());
-    }
+    bool use_line_icon = this->show_line_icons_ && (trip.route_name == "1" || trip.route_name == "2");
+    int route_width;
 
-    int route_width, _;
-    this->font_->measure(trip.route_name.c_str(), &route_width, &_, &_, &_);
+    if (use_line_icon) {
+      route_width = 8;  // icon is 8x8
+      if (!no_draw) {
+        int icon_y = y_offset;
+        this->draw_line_icon_(0, icon_y, trip.route_name);
+      }
+    } else {
+      if (!no_draw) {
+        this->display_->print(0, y_offset, this->font_, trip.route_color, display::TextAlign::TOP_LEFT, trip.route_name.c_str());
+      }
+      int _;
+      this->font_->measure(trip.route_name.c_str(), &route_width, &_, &_, &_);
+    }
 
     auto time_display = this->localization_.fmt_duration_from_now(
       this->display_departure_times_ ? trip.departure_time : trip.arrival_time,
       rtc_now
     );
 
-    int time_width;
+    int time_width, _;
     this->font_->measure(time_display.c_str(), &time_width, &_, &_, &_);
 
     int headsign_clipping_start = route_width + 3;
@@ -463,6 +550,35 @@ void HOT TransitTracker::draw_schedule() {
 
   this->schedule_state_.mutex.lock();
 
+  // Create a sorted copy of trips if we have a custom sort order
+  std::vector<Trip> sorted_trips = this->schedule_state_.trips;
+  
+  if (!this->route_sort_order_.empty()) {
+    std::stable_sort(sorted_trips.begin(), sorted_trips.end(), 
+      [this](const Trip &a, const Trip &b) {
+        // Create composite key: route_id|stop_id
+        std::string key_a = a.route_id + "|" + a.stop_id;
+        std::string key_b = b.route_id + "|" + b.stop_id;
+        
+        // Find positions in sort order (-1 if not found)
+        int pos_a = -1;
+        int pos_b = -1;
+        
+        for (size_t i = 0; i < this->route_sort_order_.size(); i++) {
+          if (this->route_sort_order_[i] == key_a) pos_a = i;
+          if (this->route_sort_order_[i] == key_b) pos_b = i;
+        }
+        
+        // Routes in sort order come before routes not in sort order
+        if (pos_a >= 0 && pos_b < 0) return true;   // a is in list, b is not
+        if (pos_a < 0 && pos_b >= 0) return false;  // b is in list, a is not
+        if (pos_a < 0 && pos_b < 0) return false;   // neither in list, keep original order
+        
+        // Both in sort order: sort by position
+        return pos_a < pos_b;
+      });
+  }
+
   int nominal_font_height = this->font_->get_ascender() + this->font_->get_descender();
   unsigned long uptime = millis();
   uint rtc_now = this->rtc_->now().timestamp;
@@ -470,7 +586,7 @@ void HOT TransitTracker::draw_schedule() {
   int scroll_cycle_duration = 0;
   if (this->scroll_headsigns_) {
     int largest_headsign_overflow = 0;
-    for (const Trip &trip : this->schedule_state_.trips) {
+    for (const Trip &trip : sorted_trips) {
       int headsign_overflow;
       this->draw_trip(trip, 0, nominal_font_height, uptime, rtc_now, true, &headsign_overflow);
       largest_headsign_overflow = max(largest_headsign_overflow, headsign_overflow);
@@ -485,7 +601,7 @@ void HOT TransitTracker::draw_schedule() {
   int max_trips_height = (this->limit_ * this->font_->get_ascender()) + ((this->limit_ - 1) * this->font_->get_descender());
   int y_offset = (this->display_->get_height() % max_trips_height) / 2;
 
-  for (const Trip &trip : this->schedule_state_.trips) {
+  for (const Trip &trip : sorted_trips) {
     this->draw_trip(trip, y_offset, nominal_font_height, uptime, rtc_now, false, nullptr, scroll_cycle_duration);
     y_offset += nominal_font_height;
   }

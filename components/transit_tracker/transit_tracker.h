@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <vector>
 #include <ArduinoWebsockets.h>
 
 #include "esphome/core/component.h"
@@ -54,6 +55,8 @@ class TransitTracker : public Component {
 
     void set_abbreviations_from_text(const std::string &text);
     void set_route_styles_from_text(const std::string &text);
+    void set_sort_order_from_text(const std::string &text);
+    void set_show_line_icons(bool show_line_icons) { show_line_icons_ = show_line_icons; }
 
   protected:
     static constexpr int scroll_speed = 10; // pixels/second
@@ -63,6 +66,7 @@ class TransitTracker : public Component {
     std::string from_now_(time_t unix_timestamp, uint rtc_now) const;
     void draw_text_centered_(const char *text, Color color);
     void draw_realtime_icon_(int bottom_right_x, int bottom_right_y, unsigned long now);
+    void draw_line_icon_(int x, int y, const std::string &route_name);
 
     void draw_trip(
       const Trip &trip, int y_offset, int font_height, unsigned long uptime, uint rtc_now,
@@ -96,6 +100,8 @@ class TransitTracker : public Component {
     std::map<std::string, std::string> abbreviations_;
     Color default_route_color_ = Color(0x028e51);
     std::map<std::string, RouteStyle> route_styles_;
+    std::vector<std::string> route_sort_order_;
+    bool show_line_icons_ = true;
     bool scroll_headsigns_ = false;
 };
 
