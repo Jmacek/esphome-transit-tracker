@@ -389,10 +389,10 @@ void TransitTracker::draw_line_icon_(int x, int y, const std::string &route_name
   const uint8_t (*icon)[8] = nullptr;
   Color line_color;
 
-  if (route_name == "1") {
+  if (route_name == "1 Line") {
     icon = line_1_icon;
     line_color = LINE_1_COLOR;
-  } else if (route_name == "2") {
+  } else if (route_name == "2 Line") {
     icon = line_2_icon;
     line_color = LINE_2_COLOR;
   } else {
@@ -415,7 +415,7 @@ void TransitTracker::draw_trip(
     const Trip &trip, int y_offset, int font_height, unsigned long uptime, uint rtc_now,
     bool no_draw, int *headsign_overflow_out, int scroll_cycle_duration
 ) {
-    bool use_line_icon = this->show_line_icons_ && (trip.route_name == "1" || trip.route_name == "2");
+    bool use_line_icon = this->show_line_icons_ && (trip.route_name == "1 Line" || trip.route_name == "2 Line");
     int route_width;
 
     if (use_line_icon) {
