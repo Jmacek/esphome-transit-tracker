@@ -13,6 +13,7 @@ class Trip {
     std::string route_id;
     std::string stop_id;
     std::string route_name;
+    std::string api_route_name;
     Color route_color;
     std::string headsign;
     time_t arrival_time;

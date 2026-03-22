@@ -164,7 +164,8 @@ void TransitTracker::on_ws_message_(websockets::WebsocketsMessage message) {
       auto route_style = this->route_styles_.find(route_id);
 
       Color route_color = this->default_route_color_;
-      std::string route_name = trip["routeName"].as<std::string>();
+      std::string api_route_name = trip["routeName"].as<std::string>();
+      std::string route_name = api_route_name;
 
       if (route_style != this->route_styles_.end()) {
         route_color = route_style->second.color;
@@ -175,8 +176,9 @@ void TransitTracker::on_ws_message_(websockets::WebsocketsMessage message) {
 
       this->schedule_state_.trips.push_back({
         .route_id = route_id,
-        .stop_id = trip["stopId"].as<std::string>(),  // Add this
+        .stop_id = trip["stopId"].as<std::string>(),
         .route_name = route_name,
+        .api_route_name = api_route_name,
         .route_color = route_color,
         .headsign = headsign,
         .arrival_time = trip["arrivalTime"].as<time_t>(),
@@ -415,14 +417,14 @@ void TransitTracker::draw_trip(
     const Trip &trip, int y_offset, int font_height, unsigned long uptime, uint rtc_now,
     bool no_draw, int *headsign_overflow_out, int scroll_cycle_duration
 ) {
-    bool use_line_icon = this->show_line_icons_ && (trip.route_name == "1 Line" || trip.route_name == "2 Line");
+    bool use_line_icon = this->show_line_icons_ && (trip.api_route_name == "1 Line" || trip.api_route_name == "2 Line");
     int route_width;
 
     if (use_line_icon) {
       route_width = 8;  // icon is 8x8
       if (!no_draw) {
         int icon_y = y_offset;
-        this->draw_line_icon_(0, icon_y, trip.route_name);
+        this->draw_line_icon_(0, icon_y, trip.api_route_name);
       }
     } else {
       if (!no_draw) {
