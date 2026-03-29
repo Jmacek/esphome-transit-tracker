@@ -211,7 +211,44 @@ void TransitTracker::on_ws_event_(websockets::WebsocketsEvent event, String data
         data["feedCode"] = this->feed_code_;
       }
 
-      data["routeStopPairs"] = this->schedule_string_;
+      // Build route pairs from schedule, sorted by user's sort order, limited to display capacity
+      auto all_pairs = split(this->schedule_string_, ';');
+
+      if (!this->route_sort_order_.empty() && (int)all_pairs.size() > this->limit_) {
+        // Sort pairs by their position in route_sort_order_
+        std::stable_sort(all_pairs.begin(), all_pairs.end(),
+          [this](const std::string &a, const std::string &b) {
+            // Extract routeId|stopId key from "routeId,stopId,offset"
+            auto pa = split(a, ',');
+            auto pb = split(b, ',');
+            std::string key_a = (pa.size() >= 2) ? pa[0] + "|" + pa[1] : a;
+            std::string key_b = (pb.size() >= 2) ? pb[0] + "|" + pb[1] : b;
+
+            int pos_a = -1, pos_b = -1;
+            for (size_t i = 0; i < this->route_sort_order_.size(); i++) {
+              if (this->route_sort_order_[i] == key_a) pos_a = i;
+              if (this->route_sort_order_[i] == key_b) pos_b = i;
+            }
+
+            if (pos_a >= 0 && pos_b < 0) return true;
+            if (pos_a < 0 && pos_b >= 0) return false;
+            if (pos_a < 0 && pos_b < 0) return false;
+            return pos_a < pos_b;
+          });
+
+        // Keep only top limit_ pairs
+        if ((int)all_pairs.size() > this->limit_) {
+          all_pairs.resize(this->limit_);
+        }
+      }
+
+      std::string trimmed_schedule;
+      for (size_t i = 0; i < all_pairs.size(); i++) {
+        if (i > 0) trimmed_schedule += ";";
+        trimmed_schedule += all_pairs[i];
+      }
+
+      data["routeStopPairs"] = trimmed_schedule;
       data["limit"] = this->limit_;
       data["sortByDeparture"] = this->display_departure_times_;
       data["listMode"] = this->list_mode_;
@@ -600,12 +637,21 @@ void HOT TransitTracker::draw_schedule() {
     }
   }
 
+  // Calculate how many trips actually fit on screen
+  int display_h = this->display_->get_height();
   int num_trips = sorted_trips.size();
-  int max_trips_height = (num_trips * this->font_->get_ascender()) + ((num_trips > 0 ? num_trips - 1 : 0) * this->font_->get_descender());
-  int y_offset = (this->display_->get_height() - max_trips_height) / 2;
+  int fits = 0;
+  for (int i = 1; i <= num_trips; i++) {
+    int h = (i * this->font_->get_ascender()) + ((i - 1) * this->font_->get_descender());
+    if (h <= display_h) fits = i;
+    else break;
+  }
+  int max_trips_height = (fits * this->font_->get_ascender()) + ((fits > 0 ? fits - 1 : 0) * this->font_->get_descender());
+  int y_offset = (display_h - max_trips_height) / 2;
   if (y_offset < 0) y_offset = 0;
 
   for (const Trip &trip : sorted_trips) {
+    if (y_offset + this->font_->get_ascender() > this->display_->get_height()) break;
     this->draw_trip(trip, y_offset, nominal_font_height, uptime, rtc_now, false, nullptr, scroll_cycle_duration);
     y_offset += nominal_font_height;
   }
